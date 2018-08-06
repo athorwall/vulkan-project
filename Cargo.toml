@@ -1,0 +1,13 @@
+[package]
+name = "vulkan-project"
+version = "0.1.0"
+authors = ["Andrew Thorwall <athorwall@palantir.com>"]
+
+[dependencies]
+vulkano = "0.9"
+vulkano-shader-derive = "0.9"
+vulkano-win = "0.9"
+cgmath = "0.14.1"
+image = "0.14.0"
+winit = "0.11.0"
+time = "0.1.37"
