@@ -1,5 +1,5 @@
 [package]
-name = "vulkan-project"
+name = "render"
 version = "0.1.0"
 authors = ["Andrew Thorwall <athorwall@palantir.com>"]
 

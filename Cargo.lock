@@ -678,6 +678,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "render"
+version = "0.1.0"
+dependencies = [
+ "cgmath 0.14.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "image 0.14.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "time 0.1.40 (registry+https://github.com/rust-lang/crates.io-index)",
+ "vulkano 0.9.0",
+ "vulkano-shader-derive 0.9.0",
+ "vulkano-win 0.9.0",
+ "winit 0.16.2 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "scoped_threadpool"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -800,19 +813,6 @@ version = "0.3.3"
 name = "void"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-
-[[package]]
-name = "vulkan-project"
-version = "0.1.0"
-dependencies = [
- "cgmath 0.14.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "image 0.14.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "time 0.1.40 (registry+https://github.com/rust-lang/crates.io-index)",
- "vulkano 0.9.0",
- "vulkano-shader-derive 0.9.0",
- "vulkano-win 0.9.0",
- "winit 0.16.2 (registry+https://github.com/rust-lang/crates.io-index)",
-]
 
 [[package]]
 name = "vulkano"
