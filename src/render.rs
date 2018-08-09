@@ -21,6 +21,7 @@ use vulkano::{
     command_buffer::{
         AutoCommandBufferBuilder,
         DynamicState,
+        pool::standard::StandardCommandPoolBuilder,
     },
     device::{
         Device,
@@ -71,6 +72,7 @@ use cgmath::{
 use std;
 
 use geometry::Vertex;
+use geometry::Mesh;
 
 mod vs {
     #[derive(VulkanoShader)]
@@ -119,6 +121,9 @@ pub struct SimpleRenderer {
     window: Arc<Surface<Window>>,
     dimensions: [u32; 2],
 
+    // definitely not good
+    command_buffer_builder: AutoCommandBufferBuilder<StandardCommandPoolBuilder>,
+
     recreate_swapchain: bool,
     previous_frame_end: Box<GpuFuture>,
 }
@@ -150,8 +155,12 @@ impl SimpleRenderer {
                 .. vulkano::device::DeviceExtensions::none()
             };
 
-            Device::new(physical, physical.supported_features(), &device_ext,
-                        [(queue, 0.5)].iter().cloned()).expect("failed to create device")
+            Device::new(
+                physical,
+                physical.supported_features(),
+                &device_ext,
+                [(queue, 0.5)].iter().cloned()
+            ).expect("failed to create device")
         };
 
         let queue = queues.next().unwrap();
@@ -238,7 +247,15 @@ impl SimpleRenderer {
         }
     }
 
-    pub fn do_stuff(&mut self) {
+    pub fn mesh_from_vertices(&self, vertices: Vec<Vertex>) -> Mesh {
+        Mesh::new(CpuAccessibleBuffer::from_iter(
+            self.device.clone(),
+            BufferUsage::all(),
+            vertices.iter().cloned(),
+        ).expect("failed to create buffer"))
+    }
+
+    pub fn start_frame(&mut self) {
         let proj = cgmath::perspective(
             cgmath::Rad(std::f32::consts::FRAC_PI_2),
             { self.dimensions[0] as f32 / self.dimensions[1] as f32 },
@@ -328,7 +345,7 @@ impl SimpleRenderer {
                 Err(err) => panic!("{:?}", err)
             };
 
-        let command_buffer = AutoCommandBufferBuilder::primary_one_time_submit(
+        self.command_buffer = AutoCommandBufferBuilder::primary_one_time_submit(
             self.device.clone(),
             self.queue.family()
         ).unwrap()
@@ -337,7 +354,15 @@ impl SimpleRenderer {
                 false,
                 vec![[0.0, 0.0, 1.0, 1.0].into()]
             )
-            .unwrap()
+            .unwrap();
+    }
+
+    pub fn draw(&mut self, mesh: &Mesh) {
+
+    }
+
+    pub fn do_stuff(&mut self) {
+
             .draw(
                 self.pipeline.clone(),
                 &DynamicState {
