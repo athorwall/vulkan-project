@@ -11,6 +11,7 @@ use vulkano_win::VkSurfaceBuild;
 use vulkano;
 use vulkano::{
     buffer::{
+        BufferAccess,
         BufferUsage,
         CpuAccessibleBuffer,
         cpu_pool::{
@@ -21,16 +22,12 @@ use vulkano::{
         AutoCommandBufferBuilder,
         DynamicState,
     },
-    descriptor::{
-        pipeline_layout::PipelineLayoutAbstract,
-    },
     device::{
         Device,
         Queue,
     },
     framebuffer::{
         RenderPassAbstract,
-        RenderPassSubpassInterface,
         Framebuffer,
         FramebufferAbstract,
         Subpass,
@@ -40,16 +37,10 @@ use vulkano::{
     },
     instance::{
         Instance,
-        PhysicalDevice,
     },
     pipeline::{
         GraphicsPipeline,
         GraphicsPipelineAbstract,
-        GraphicsPipelineCreationError,
-        shader::GraphicsEntryPointAbstract,
-        vertex::{
-            VertexDefinition,
-        },
         viewport::{
             Viewport,
         },
@@ -78,6 +69,8 @@ use cgmath::{
 };
 
 use std;
+
+use geometry::Vertex;
 
 mod vs {
     #[derive(VulkanoShader)]
@@ -111,10 +104,9 @@ void main() {
     struct Dummy;
 }
 
-pub struct SimpleRenderer<'a> {
+pub struct SimpleRenderer {
     instance: Arc<Instance>,
-    // TODO: store index?
-    physical: PhysicalDevice<'a>,
+    physical_device_index: usize,
     device: Arc<Device>,
     queue: Arc<Queue>,
     swapchain: Arc<Swapchain<Window>>,
@@ -131,7 +123,7 @@ pub struct SimpleRenderer<'a> {
     previous_frame_end: Box<GpuFuture>,
 }
 
-impl <'a> SimpleRenderer<'a> {
+impl SimpleRenderer {
     pub fn create() -> Self {
         let instance = {
             let extensions = vulkano_win::required_extensions();
@@ -140,16 +132,12 @@ impl <'a> SimpleRenderer<'a> {
 
         let physical = vulkano::instance::PhysicalDevice::enumerate(&instance)
             .next().expect("no device available");
-        println!("Using device: {} (type: {:?})", physical.name(), physical.ty());
+        info!("Using physical device: {} (type: {:?})", physical.name(), physical.ty());
 
-
-        let mut events_loop = winit::EventsLoop::new();
+        let events_loop = winit::EventsLoop::new();
         let window = winit::WindowBuilder::new().build_vk_surface(&events_loop, instance.clone()).unwrap();
 
-        let mut dimensions = {
-            let logical_size = window.window().get_inner_size().unwrap();
-            [logical_size.width as u32, logical_size.height as u32]
-        };
+        let mut dimensions;
 
         let queue = physical.queue_families().find(|&q| {
             // We take the first queue that supports drawing to our window.
@@ -168,11 +156,11 @@ impl <'a> SimpleRenderer<'a> {
 
         let queue = queues.next().unwrap();
 
-        let (mut swapchain, mut images) = {
+        let (swapchain, images) = {
             let caps = window.capabilities(physical)
                 .expect("failed to get surface capabilities");
+            dimensions = caps.current_extent.unwrap_or([1024, 768]);
             let alpha = caps.supported_composite_alpha.iter().next().unwrap();
-            dimensions = caps.current_extent.unwrap_or(dimensions);
             let format = caps.supported_formats[0].0;
             Swapchain::new(
                 device.clone(),
@@ -194,9 +182,6 @@ impl <'a> SimpleRenderer<'a> {
         let uniform_buffer = vulkano::buffer::cpu_pool::CpuBufferPool::<vs::ty::Data>
         ::new(device.clone(), vulkano::buffer::BufferUsage::all());
 
-        let vs = vs::Shader::load(device.clone()).expect("failed to create shader module");
-        let fs = fs::Shader::load(device.clone()).expect("failed to create shader module");
-
         let render_pass = Arc::new(single_pass_renderpass!(device.clone(),
             attachments: {
                 color: {
@@ -213,8 +198,11 @@ impl <'a> SimpleRenderer<'a> {
             }
         ).unwrap());
 
+        let vs = vs::Shader::load(device.clone()).expect("failed to create shader module");
+        let fs = fs::Shader::load(device.clone()).expect("failed to create shader module");
+
         let pipeline = Arc::new(GraphicsPipeline::start()
-            .vertex_input_single_buffer::<GraphicsEntryPointAbstract::>()
+            .vertex_input_single_buffer::<Vertex>()
             .vertex_shader(vs.main_entry_point(), ())
             .triangle_list()
             .viewports_dynamic_scissors_irrelevant(1)
@@ -223,17 +211,17 @@ impl <'a> SimpleRenderer<'a> {
             .build(device.clone())
             .unwrap());
 
-        let mut framebuffers: Option<Vec<Arc<FramebufferAbstract + Send + Sync>>> = None;
+        let framebuffers: Option<Vec<Arc<FramebufferAbstract + Send + Sync>>> = None;
 
         // Initialization is finally finished!
 
-        let mut recreate_swapchain = false;
+        let recreate_swapchain = false;
 
-        let mut previous_frame_end = Box::new(now(device.clone())) as Box<GpuFuture>;
+        let previous_frame_end = Box::new(now(device.clone())) as Box<GpuFuture>;
 
         SimpleRenderer {
-            instance,
-            physical,
+            instance: instance.clone(),
+            physical_device_index: physical.index(),
             device,
             queue,
             swapchain,
@@ -251,7 +239,7 @@ impl <'a> SimpleRenderer<'a> {
     }
 
     pub fn do_stuff(&mut self) {
-        let mut proj = cgmath::perspective(
+        let proj = cgmath::perspective(
             cgmath::Rad(std::f32::consts::FRAC_PI_2),
             { self.dimensions[0] as f32 / self.dimensions[1] as f32 },
             0.01,
@@ -264,11 +252,7 @@ impl <'a> SimpleRenderer<'a> {
         );
         let world = cgmath::Matrix4::identity();
 
-        let vertex_buffer = {
-            #[derive(Debug, Clone)]
-            struct Vertex { position: [f32; 3] }
-            impl_vertex!(Vertex, position);
-
+        let vertex_buffer: Arc<BufferAccess + Send + Sync> = {
             CpuAccessibleBuffer::from_iter(self.device.clone(), BufferUsage::all(), [
                 Vertex { position: [-0.5, -0.25, -2.0] },
                 Vertex { position: [0.0, 0.5, -2.0] },
@@ -277,16 +261,22 @@ impl <'a> SimpleRenderer<'a> {
         };
 
         self.previous_frame_end.cleanup_finished();
-
         if self.recreate_swapchain {
-            self.dimensions = {
-                let logical_size = self.window.window().get_inner_size().unwrap();
-                [logical_size.width as u32, logical_size.height as u32]
-            };
+            info!("Recreating swapchain.");
+            let physical = vulkano::instance::PhysicalDevice::enumerate(&self.instance)
+                .nth(self.physical_device_index)
+                .expect("Couldn't get physical device.");
+            self.dimensions = self.window.capabilities(physical)
+                .expect("failed to get surface capabilities")
+                .current_extent.unwrap_or([1024, 768]);
 
             let (new_swapchain, new_images) = match self.swapchain.recreate_with_dimension(self.dimensions) {
-                Ok(r) => r,
+                Ok(r) => {
+                    info!("Successfully recreated swapchain.");
+                    r
+                },
                 Err(SwapchainCreationError::UnsupportedDimensions) => {
+                    info!("Failed to recreate swapchain; unsupported dimensions.");
                     return;
                 },
                 Err(err) => panic!("{:?}", err)
@@ -302,11 +292,11 @@ impl <'a> SimpleRenderer<'a> {
         // Because framebuffers contains an Arc on the old swapchain, we need to
         // recreate framebuffers as well.
         if self.framebuffers.is_none() {
-            let new_framebuffers = Some(self.images.iter().map(|image| {
+            let new_framebuffers: Option<Vec<Arc<FramebufferAbstract + Send + Sync>>> = Some(self.images.iter().map(|image| {
                 Arc::new(Framebuffer::start(self.render_pass.clone())
                     .add(image.clone()).unwrap()
-                    .build().unwrap())
-            }).collect::<Vec<_>>());
+                    .build().unwrap()) as Arc<FramebufferAbstract + Send + Sync>
+            }).collect::<Vec<Arc<FramebufferAbstract + Send + Sync>>>());
             mem::replace(&mut self.framebuffers, new_framebuffers);
         }
 
@@ -360,7 +350,8 @@ impl <'a> SimpleRenderer<'a> {
                     }]),
                     scissors: None,
                 },
-                vertex_buffer.clone(),
+                // uhh
+                vec![vertex_buffer.clone()],
                 set.clone(),
                 ()
             )
@@ -370,21 +361,29 @@ impl <'a> SimpleRenderer<'a> {
             .build()
             .unwrap();
 
-        let future = self.previous_frame_end.join(acquire_future)
-            .then_execute(self.queue.clone(), command_buffer)
-            .unwrap()
+        let previous_frame_end = mem::replace(
+            &mut self.previous_frame_end,
+            Box::new(now(self.device.clone())) as Box<GpuFuture>,
+        );
+        let future = previous_frame_end
+            .join(acquire_future)
+            .then_execute(self.queue.clone(), command_buffer).unwrap()
             .then_swapchain_present(self.queue.clone(), self.swapchain.clone(), image_num)
             .then_signal_fence_and_flush().unwrap();
         self.previous_frame_end = Box::new(future) as Box<_>;
 
         let mut done = false;
+        let mut recreate_swapchain = self.recreate_swapchain;
         self.events_loop.poll_events(|ev| {
             match ev {
-                winit::Event::WindowEvent { event: winit::WindowEvent::CloseRequested, .. } => done = true,
-                winit::Event::WindowEvent { event: winit::WindowEvent::Resized(_), .. } => self.recreate_swapchain = true,
+                winit::Event::WindowEvent { event: winit::WindowEvent::CloseRequested, .. } => {
+                    done = true;
+                },
+                winit::Event::WindowEvent { event: winit::WindowEvent::Resized(_), .. } => recreate_swapchain = true,
                 _ => ()
             }
         });
+        self.recreate_swapchain = recreate_swapchain;
         if done { return; }
     }
 }
