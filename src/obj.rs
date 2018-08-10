@@ -1,3 +1,14 @@
+use std::env;
+use std::fs::File;
+use std::io::prelude::*;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Vertex {
+    pub position: (f32, f32, f32),
+    pub normal: (f32, f32, f32),
+    pub uv: (f32, f32),
+}
+
 #[derive(PartialEq, Debug)]
 pub struct ObjModel {
     /// Vertex coordinates.
@@ -23,7 +34,14 @@ impl ObjModel {
         }
     }
 
-    pub fn parse(input: &str) -> ObjModel {
+    pub fn from_file(filename: &str) -> Self {
+        let mut f = File::open(filename).expect("File not found!");
+        let mut contents = String::new();
+        f.read_to_string(&mut contents).expect("Error reading file!");
+        ObjModel::parse(contents.as_str())
+    }
+
+    pub fn parse(input: &str) -> Self {
         let mut model = ObjModel::new();
         for line in input.lines() {
             match ObjModel::parse_line(line) {
@@ -115,6 +133,42 @@ impl ObjModel {
             v: parts.get(0).unwrap().unwrap(),
             vt: *parts.get(1).unwrap(),
             vn: parts.get(2).unwrap().unwrap(),
+        }
+    }
+
+    pub fn vertices(&self) -> Vec<Vertex> {
+        let mut verts = vec![];
+        for face in &self.f {
+            match face.len() {
+                3 => {
+                    verts.push(self.lookup_vertex_indices(face[0]));
+                    verts.push(self.lookup_vertex_indices(face[1]));
+                    verts.push(self.lookup_vertex_indices(face[2]));
+                },
+                4 => {
+                    verts.push(self.lookup_vertex_indices(face[0]));
+                    verts.push(self.lookup_vertex_indices(face[1]));
+                    verts.push(self.lookup_vertex_indices(face[2]));
+                    verts.push(self.lookup_vertex_indices(face[2]));
+                    verts.push(self.lookup_vertex_indices(face[3]));
+                    verts.push(self.lookup_vertex_indices(face[0]));
+                },
+                _ => panic!("Invalid face!"),
+            }
+        }
+        verts
+    }
+
+    fn lookup_vertex_indices(&self, indices: VertexIndices) -> Vertex {
+        let pos = self.v.get(indices.v - 1).unwrap();
+        let normal = self.vn.get(indices.vn - 1).unwrap();
+        let uv = indices.vt
+            .map(|i| { self.vt.get(i - 1).unwrap() })
+            .unwrap_or(&(0.0, 0.0));
+        Vertex {
+            position: (pos.0, pos.1, pos.2),
+            normal: *normal,
+            uv: *uv,
         }
     }
 }
@@ -239,4 +293,84 @@ f 7821//5 528//6 48//7 529//8
         assert_eq!(actual, expected);
     }
 
+    #[test]
+    fn test_vertices() {
+        let obj = ObjModel {
+            v: vec![
+                (1.0, 1.0, 1.0, 1.0),
+                (-1.0, 1.0, 1.0, 1.0),
+                (-1.0, -1.0, 1.0, 1.0),
+                (1.0, -1.0, 1.0, 1.0),
+            ],
+            vn: vec![
+                (0.5, -0.5, 0.5),
+            ],
+            vt: vec![
+                (0.0, 0.0),
+                (1.0, 1.0),
+            ],
+            f: vec![
+                vec![
+                    VertexIndices { v: 1, vt: Some(1), vn: 1 },
+                    VertexIndices { v: 2, vt: Some(1), vn: 1 },
+                    VertexIndices { v: 3, vt: Some(2), vn: 1 },
+                    VertexIndices { v: 4, vt: Some(2), vn: 1 },
+                ],
+                vec![
+                    VertexIndices { v: 1, vt: Some(1), vn: 1 },
+                    VertexIndices { v: 2, vt: Some(1), vn: 1 },
+                    VertexIndices { v: 3, vt: Some(2), vn: 1 },
+                ],
+            ],
+        };
+        let actual = obj.vertices();
+        let expected = vec![
+            Vertex {
+                position: (1.0, 1.0, 1.0),
+                normal: (0.5, -0.5, 0.5),
+                uv: (0.0, 0.0),
+            },
+            Vertex {
+                position: (-1.0, 1.0, 1.0),
+                normal: (0.5, -0.5, 0.5),
+                uv: (0.0, 0.0),
+            },
+            Vertex {
+                position: (-1.0, -1.0, 1.0),
+                normal: (0.5, -0.5, 0.5),
+                uv: (1.0, 1.0),
+            },
+            Vertex {
+                position: (-1.0, -1.0, 1.0),
+                normal: (0.5, -0.5, 0.5),
+                uv: (1.0, 1.0),
+            },
+            Vertex {
+                position: (1.0, -1.0, 1.0),
+                normal: (0.5, -0.5, 0.5),
+                uv: (1.0, 1.0),
+            },
+            Vertex {
+                position: (1.0, 1.0, 1.0),
+                normal: (0.5, -0.5, 0.5),
+                uv: (0.0, 0.0),
+            },
+            Vertex {
+                position: (1.0, 1.0, 1.0),
+                normal: (0.5, -0.5, 0.5),
+                uv: (0.0, 0.0),
+            },
+            Vertex {
+                position: (-1.0, 1.0, 1.0),
+                normal: (0.5, -0.5, 0.5),
+                uv: (0.0, 0.0),
+            },
+            Vertex {
+                position: (-1.0, -1.0, 1.0),
+                normal: (0.5, -0.5, 0.5),
+                uv: (1.0, 1.0),
+            },
+        ];
+        assert_eq!(actual, expected);
+    }
 }

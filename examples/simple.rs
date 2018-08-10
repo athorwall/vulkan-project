@@ -13,7 +13,7 @@
 extern crate cgmath;
 extern crate winit;
 extern crate time;
-
+extern crate render;
 #[macro_use]
 extern crate vulkano;
 #[macro_use]
@@ -23,11 +23,18 @@ extern crate vulkano_win;
 use vulkano_win::VkSurfaceBuild;
 use vulkano::sync::GpuFuture;
 
+use render::obj::*;
+
 use std::sync::Arc;
 
 fn main() {
-    // The start of this example is exactly the same as `triangle`. You should read the
-    // `triangle` example if you haven't done so yet.
+    let monkey = ObjModel::from_file("resources/monkey.obj");
+    let monkey_vertices: Vec<Vertex> = monkey.vertices().iter().map(|vertex| {
+        Vertex {
+            position: vertex.position,
+            normal: vertex.normal,
+        }
+    }).collect();
 
     let extensions = vulkano_win::required_extensions();
     let instance = vulkano::instance::Instance::new(None, &extensions, None).expect("failed to create instance");
@@ -74,16 +81,12 @@ fn main() {
     let mut depth_buffer = vulkano::image::attachment::AttachmentImage::transient(device.clone(), dimensions, vulkano::format::D16Unorm).unwrap();
 
     let vertex_buffer = vulkano::buffer::cpu_access::CpuAccessibleBuffer
-    ::from_iter(device.clone(), vulkano::buffer::BufferUsage::all(), vec![
-        Vertex { position: (0.5, 0.5, 0.0), normal: (0.0, 0.0, 1.0) },
-        Vertex { position: (0.5, -0.5, 0.0), normal: (0.0, 0.0, 1.0) },
-        Vertex { position: (-0.5, 0.0, 0.0), normal: (0.0, 0.0, 1.0) },
-    ].iter().cloned()).expect("failed to create buffer");
+    ::from_iter(device.clone(), vulkano::buffer::BufferUsage::all(), monkey_vertices.iter().cloned()).expect("failed to create buffer");
 
     // note: this teapot was meant for OpenGL where the origin is at the lower left
     //       instead the origin is at the upper left in vulkan, so we reverse the Y axis
     let mut proj = cgmath::perspective(cgmath::Rad(std::f32::consts::FRAC_PI_2), { dimensions[0] as f32 / dimensions[1] as f32 }, 0.01, 100.0);
-    let view = cgmath::Matrix4::look_at(cgmath::Point3::new(0.3, 0.3, 1.0), cgmath::Point3::new(0.0, 0.0, 0.0), cgmath::Vector3::new(0.0, -1.0, 0.0));
+    let view = cgmath::Matrix4::look_at(cgmath::Point3::new(0.3, 0.3, 2.0), cgmath::Point3::new(0.0, 0.0, 0.0), cgmath::Vector3::new(0.0, -1.0, 0.0));
 
     let uniform_buffer = vulkano::buffer::cpu_pool::CpuBufferPool::<vs::ty::Data>
     ::new(device.clone(), vulkano::buffer::BufferUsage::all());
