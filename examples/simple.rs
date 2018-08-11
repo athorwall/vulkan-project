@@ -324,6 +324,7 @@ layout(location = 0) in vec3 position;
 layout(location = 1) in vec3 normal;
 layout(location = 2) in vec2 uv;
 
+// in world space
 layout(location = 0) out vec3 v_normal;
 layout(location = 1) out vec2 v_uv;
 layout(location = 2) out vec3 v_world_pos;
@@ -337,7 +338,7 @@ layout(set = 1, binding = 0) uniform Data {
 
 void main() {
     mat4 worldview = uniforms.view * uniforms.world;
-    v_normal = transpose(inverse(mat3(worldview))) * normal;
+    v_normal = transpose(inverse(mat3(uniforms.world))) * normal;
     v_uv = uv;
     gl_Position = uniforms.proj * worldview * vec4(position, 1.0);
     v_view_pos = (worldview * vec4(position, 1.0)).xyz;
@@ -360,7 +361,8 @@ layout(location = 3) in vec3 v_view_pos;
 
 layout(location = 0) out vec4 f_color;
 
-layout(set = 0, binding = 0) uniform sampler2D tex;
+layout(set = 0, binding = 0) uniform sampler2D color;
+//layout(set = 1, binding = 0) uniform sampler2D normal;
 
 const vec3 LIGHT = vec3(0.0, 0.0, 1.0);
 const vec3 POINT_LIGHT_POSITION = vec3(1.0, 1.0, 4.0);
@@ -370,10 +372,10 @@ const vec3 AMBIENT_LIGHT = vec3(0.1, 0.1, 0.1);
 const float LAMBERT_COEFFICIENT = 1.0;
 const float SPECULAR_COEFFICIENT = 1.0;
 
-const float ROUGHNESS = 0.004;
-const float REFRACTION = 0.0;
+const float ROUGHNESS = 0.04;
+const float REFRACTION = 0.1;
 
-const vec4 MATERIAL_COLOR = vec4(1.0, 1.0, 1.0, 1.0);
+const vec4 MATERIAL_COLOR = vec4(1.0, 0.0, 0.0, 1.0);
 
 float schlick(vec3 v, vec3 h, float refraction) {
     float r0_sqrt = (1 - refraction) / (1 + refraction);
@@ -417,17 +419,20 @@ void main() {
     float d2 = dot(l, l);
     vec3 v = -v_view_pos;
 
-    float lambert_component = 1.0;
+    vec4 lambert_component = MATERIAL_COLOR;
+    vec4 lambert = LAMBERT_COEFFICIENT * lambert_component;
+
     float specular_component = cook_torrance(normalize(v), normalize(v_normal), normalize(l), REFRACTION, ROUGHNESS);
+    vec4 specular = (SPECULAR_COEFFICIENT * specular_component).xxxx;
 
-    vec3 irradiance = POINT_LIGHT_INTENSITY / d2;
+    vec4 brdf_value = lambert + specular;
+
     float c = max(dot(normalize(v_normal), normalize(l)), 0.0);
-    float brdf_value = LAMBERT_COEFFICIENT * lambert_component + SPECULAR_COEFFICIENT * specular_component;
-
-    vec4 lighting_color = vec4(irradiance * c.xxx * brdf_value.xxx, 1.0);
-    //vec4 texture_color = texture(tex, v_uv);
+    vec4 irradiance = vec4(POINT_LIGHT_INTENSITY / d2, 1.0);
+    vec4 lighting_color = irradiance * c.xxxx * brdf_value;
+    //vec4 texture_color = texture(color, v_uv);
     vec4 texture_color = vec4(1.0, 1.0, 1.0, 1.0);
-    f_color = texture_color * lighting_color * MATERIAL_COLOR;
+    f_color = texture_color * lighting_color;
 }
 "]
     struct Dummy;
