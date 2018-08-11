@@ -19,23 +19,32 @@ extern crate vulkano;
 #[macro_use]
 extern crate vulkano_shader_derive;
 extern crate vulkano_win;
+extern crate image;
+
+use cgmath::*;
 
 use vulkano_win::VkSurfaceBuild;
 use vulkano::sync::GpuFuture;
+use vulkano::pipeline::shader::EntryPointAbstract;
 
 use render::obj::*;
 
 use std::sync::Arc;
 
-fn main() {
-    let monkey = ObjModel::from_file("resources/monkey.obj");
-    let monkey_vertices: Vec<Vertex> = monkey.vertices().iter().map(|vertex| {
+use image::*;
+
+fn load_model(filename: &str) -> Vec<Vertex> {
+    let monkey = ObjModel::from_file(filename);
+    monkey.vertices().iter().map(|vertex| {
         Vertex {
             position: vertex.position,
             normal: vertex.normal,
+            uv: vertex.uv,
         }
-    }).collect();
+    }).collect()
+}
 
+fn main() {
     let extensions = vulkano_win::required_extensions();
     let instance = vulkano::instance::Instance::new(None, &extensions, None).expect("failed to create instance");
 
@@ -80,13 +89,33 @@ fn main() {
 
     let mut depth_buffer = vulkano::image::attachment::AttachmentImage::transient(device.clone(), dimensions, vulkano::format::D16Unorm).unwrap();
 
+    let monkey_vertices = load_model("resources/monkey.obj");
+    let image = image::open("resources/Metal_Plate_007_COLOR.jpg").unwrap().to_rgba();
+    let image_data = image.into_raw().clone();
+    let (texture, texture_future) = vulkano::image::immutable::ImmutableImage::from_iter(
+        image_data.iter().cloned(),
+        vulkano::image::Dimensions::Dim2d { width: 1024, height: 1024 },
+        vulkano::format::R8G8B8A8Srgb,
+        queue.clone()).unwrap();
+    let sampler = vulkano::sampler::Sampler::new(
+        device.clone(),
+        vulkano::sampler::Filter::Linear,
+        vulkano::sampler::Filter::Linear,
+        vulkano::sampler::MipmapMode::Nearest,
+        vulkano::sampler::SamplerAddressMode::Repeat,
+        vulkano::sampler::SamplerAddressMode::Repeat,
+        vulkano::sampler::SamplerAddressMode::Repeat,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+    ).unwrap();
+
     let vertex_buffer = vulkano::buffer::cpu_access::CpuAccessibleBuffer
     ::from_iter(device.clone(), vulkano::buffer::BufferUsage::all(), monkey_vertices.iter().cloned()).expect("failed to create buffer");
 
-    // note: this teapot was meant for OpenGL where the origin is at the lower left
-    //       instead the origin is at the upper left in vulkan, so we reverse the Y axis
     let mut proj = cgmath::perspective(cgmath::Rad(std::f32::consts::FRAC_PI_2), { dimensions[0] as f32 / dimensions[1] as f32 }, 0.01, 100.0);
-    let view = cgmath::Matrix4::look_at(cgmath::Point3::new(0.3, 0.3, 2.0), cgmath::Point3::new(0.0, 0.0, 0.0), cgmath::Vector3::new(0.0, -1.0, 0.0));
+    let camera = cgmath::Matrix4::look_at(Point3 { x: 0.0, y: 0.4, z: 2.0 }, Point3 { x: 0.0, y: 0.0, z: 0.0 }, Vector3 { x: 0.0, y: -1.0, z: 0.0 }).invert().unwrap();
 
     let uniform_buffer = vulkano::buffer::cpu_pool::CpuBufferPool::<vs::ty::Data>
     ::new(device.clone(), vulkano::buffer::BufferUsage::all());
@@ -129,9 +158,23 @@ fn main() {
         .unwrap());
     let mut framebuffers: Option<Vec<Arc<vulkano::framebuffer::Framebuffer<_,_>>>> = None;
 
+    //println!("{:?}", fs.main_entry_point().layout());
+
+    let sampler_set: Arc<vulkano::descriptor::DescriptorSet+ Send + Sync> = Arc::new(vulkano::descriptor::descriptor_set::PersistentDescriptorSet::start(pipeline.clone(), 0)
+        .add_sampled_image(texture.clone(), sampler.clone()).expect("Failed to add sampled image")
+        .build().expect("Failed to build sampler set")
+    );
+
+    let mut pool = vulkano::descriptor::descriptor_set::FixedSizeDescriptorSetsPool::new(pipeline.clone(), 1);
+
     let mut recreate_swapchain = false;
 
-    let mut previous_frame = Box::new(vulkano::sync::now(device.clone())) as Box<GpuFuture>;
+    // TODO: understand this!
+    let mut device_future = Box::new(vulkano::sync::now(device.clone())) as Box<GpuFuture>;
+    let mut tex_future = Box::new(texture_future) as Box<GpuFuture>;
+    let mut previous_frame: Box<GpuFuture> = Box::new(device_future.join(tex_future));
+
+
     let rotation_start = std::time::Instant::now();
 
     let mut dynamic_state = vulkano::command_buffer::DynamicState {
@@ -191,21 +234,20 @@ fn main() {
         let uniform_buffer_subbuffer = {
             let elapsed = rotation_start.elapsed();
             let rotation = elapsed.as_secs() as f64 + elapsed.subsec_nanos() as f64 / 1_000_000_000.0;
-            let rotation = cgmath::Matrix3::from_angle_y(cgmath::Rad(rotation as f32));
+            let rotation = cgmath::Matrix3::from_angle_y(cgmath::Rad(rotation as f32 / 2.0));
 
             let uniform_data = vs::ty::Data {
                 world : cgmath::Matrix4::from(rotation).into(),
-                view : view.into(),
+                view : camera.invert().unwrap().into(),
                 proj : proj.into(),
             };
 
             uniform_buffer.next(uniform_data).unwrap()
         };
 
-        let set = Arc::new(vulkano::descriptor::descriptor_set::PersistentDescriptorSet::start(pipeline.clone(), 0)
+        let set: Arc<vulkano::descriptor::DescriptorSet + Send + Sync> = Arc::from(pool.next()
             .add_buffer(uniform_buffer_subbuffer).unwrap()
-            .build().unwrap()
-        );
+            .build().unwrap());
 
         let (image_num, acquire_future) = match vulkano::swapchain::acquire_next_image(swapchain.clone(),
                                                                                        None) {
@@ -228,7 +270,7 @@ fn main() {
                 pipeline.clone(),
                 &dynamic_state,
                 vertex_buffer.clone(),
-                set.clone(),
+                (sampler_set.clone(), set.clone()),
                 ()).unwrap()
             .end_render_pass().unwrap()
             .build().unwrap();
@@ -267,27 +309,39 @@ fn main() {
 pub struct Vertex {
     position: (f32, f32, f32),
     normal: (f32, f32, f32),
+    uv: (f32, f32),
 }
 
-impl_vertex!(Vertex, position, normal);
+impl_vertex!(Vertex, position, normal, uv);
 
 mod vs {
     #[derive(VulkanoShader)]
     #[ty = "vertex"]
     #[src = "
 #version 450
+
 layout(location = 0) in vec3 position;
 layout(location = 1) in vec3 normal;
+layout(location = 2) in vec2 uv;
+
 layout(location = 0) out vec3 v_normal;
-layout(set = 0, binding = 0) uniform Data {
+layout(location = 1) out vec2 v_uv;
+layout(location = 2) out vec3 v_world_pos;
+layout(location = 3) out vec3 v_view_pos;
+
+layout(set = 1, binding = 0) uniform Data {
     mat4 world;
     mat4 view;
     mat4 proj;
 } uniforms;
+
 void main() {
     mat4 worldview = uniforms.view * uniforms.world;
     v_normal = transpose(inverse(mat3(worldview))) * normal;
+    v_uv = uv;
     gl_Position = uniforms.proj * worldview * vec4(position, 1.0);
+    v_view_pos = (worldview * vec4(position, 1.0)).xyz;
+    v_world_pos = (uniforms.world * vec4(position, 1.0)).xyz;
 }
 "]
     struct Dummy;
@@ -298,14 +352,82 @@ mod fs {
     #[ty = "fragment"]
     #[src = "
 #version 450
+
 layout(location = 0) in vec3 v_normal;
+layout(location = 1) in vec2 v_uv;
+layout(location = 2) in vec3 v_world_pos;
+layout(location = 3) in vec3 v_view_pos;
+
 layout(location = 0) out vec4 f_color;
+
+layout(set = 0, binding = 0) uniform sampler2D tex;
+
 const vec3 LIGHT = vec3(0.0, 0.0, 1.0);
+const vec3 POINT_LIGHT_POSITION = vec3(1.0, 1.0, 4.0);
+const vec3 POINT_LIGHT_INTENSITY = vec3(10.0, 10.0, 10.0);
+const vec3 AMBIENT_LIGHT = vec3(0.1, 0.1, 0.1);
+
+const float LAMBERT_COEFFICIENT = 1.0;
+const float SPECULAR_COEFFICIENT = 1.0;
+
+const float ROUGHNESS = 0.004;
+const float REFRACTION = 0.0;
+
+const vec4 MATERIAL_COLOR = vec4(1.0, 1.0, 1.0, 1.0);
+
+float schlick(vec3 v, vec3 h, float refraction) {
+    float r0_sqrt = (1 - refraction) / (1 + refraction);
+    float r0 = r0_sqrt * r0_sqrt;
+    return r0 + (1 - r0) * pow(1 - dot(v, h), 5);
+}
+
+// all vec arguments must be normalized
+float geometric_attenuation(vec3 v, vec3 n, vec3 h, vec3 l) {
+    float vh = dot(v, h);
+    float hn = dot(h, n);
+    float ln = dot(l, n);
+    float vn = dot(v, n);
+    return min(1, min(2 * hn * vn / vh, 2 * hn * ln / vh));
+}
+
+float ggx_chi(float x) {
+    return x > 0 ? 1 : 0;
+}
+
+// all vec arguments must be normalized
+float ggx_distribution(vec3 h, vec3 n, float roughness) {
+    float r2 = roughness * roughness;
+    float nh = dot(n, h);
+    float denom = nh * nh * r2 + (1 - nh * nh);
+    return r2 * ggx_chi(nh) / (3.14 * denom * denom);
+}
+
+// all vec arguments must be normalized
+float cook_torrance(vec3 v, vec3 n, vec3 l, float refraction, float roughness) {
+    vec3 h = normalize((v + l) / 2);
+    float d = ggx_distribution(h, n, roughness);
+    float g = geometric_attenuation(v, n, h, l);
+    float s = schlick(v, h, refraction);
+
+    return d * g * s / (4 * dot(v, n) * dot(n, l));
+}
+
 void main() {
-    float brightness = dot(normalize(v_normal), normalize(LIGHT));
-    vec3 dark_color = vec3(0.6, 0.0, 0.0);
-    vec3 regular_color = vec3(1.0, 0.0, 0.0);
-    f_color = vec4(mix(dark_color, regular_color, brightness), 1.0);
+    vec3 l = POINT_LIGHT_POSITION - v_world_pos;
+    float d2 = dot(l, l);
+    vec3 v = -v_view_pos;
+
+    float lambert_component = 1.0;
+    float specular_component = cook_torrance(normalize(v), normalize(v_normal), normalize(l), REFRACTION, ROUGHNESS);
+
+    vec3 irradiance = POINT_LIGHT_INTENSITY / d2;
+    float c = max(dot(normalize(v_normal), normalize(l)), 0.0);
+    float brdf_value = LAMBERT_COEFFICIENT * lambert_component + SPECULAR_COEFFICIENT * specular_component;
+
+    vec4 lighting_color = vec4(irradiance * c.xxx * brdf_value.xxx, 1.0);
+    //vec4 texture_color = texture(tex, v_uv);
+    vec4 texture_color = vec4(1.0, 1.0, 1.0, 1.0);
+    f_color = texture_color * lighting_color * MATERIAL_COLOR;
 }
 "]
     struct Dummy;

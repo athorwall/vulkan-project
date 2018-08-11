@@ -5,10 +5,10 @@ authors = ["Andrew Thorwall <athorwall@palantir.com>"]
 
 [dependencies]
 cgmath = "0.14.1"
-image = "0.14.0"
 winit = "0.16.0"
 time = "0.1.37"
 log = "0.4.2"
+image = "0.19.0"
 
 [dependencies.vulkano]
 path = "../vulkano/vulkano"
