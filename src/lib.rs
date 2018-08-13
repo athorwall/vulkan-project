@@ -8,5 +8,6 @@ extern crate cgmath;
 #[macro_use]
 extern crate log;
 
-pub mod render;
+pub mod geometry;
 pub mod obj;
+pub mod render;
