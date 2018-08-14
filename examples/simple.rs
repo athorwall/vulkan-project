@@ -1,13 +1,3 @@
-// Copyright (c) 2016 The vulkano developers
-// Licensed under the Apache License, Version 2.0
-// <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT
-// license <LICENSE-MIT or http://opensource.org/licenses/MIT>,
-// at your option. All files in the project carrying such
-// notice may not be copied, modified, or distributed except
-// according to those terms.
-
-// For the purpose of this example all unused code is allowed.
 #![allow(dead_code)]
 
 extern crate cgmath;
@@ -383,8 +373,8 @@ const vec3 AMBIENT_LIGHT = vec3(0.1, 0.1, 0.1);
 const float LAMBERT_COEFFICIENT = 1.0;
 const float SPECULAR_COEFFICIENT = 1.0;
 
-const float ROUGHNESS = 0.1;
-const float REFRACTION = 0.4;
+const float ROUGHNESS = 0.12;
+const float REFRACTION = 0.5;
 
 const vec4 MATERIAL_COLOR = vec4(1.0, 1.0, 1.0, 1.0);
 

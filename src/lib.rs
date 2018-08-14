@@ -9,5 +9,6 @@ extern crate cgmath;
 extern crate log;
 
 pub mod geometry;
+pub mod graphics;
 pub mod obj;
 pub mod render;
