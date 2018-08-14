@@ -11,11 +11,17 @@ use winit;
 use vulkano_win::VkSurfaceBuild;
 use vulkano::swapchain::Swapchain;
 use vulkano::image::SwapchainImage;
+use vulkano::instance::PhysicalDevice;
+use geometry::Vertex;
+use obj::ObjModel;
+use vulkano::image::ImageViewAccess;
+use vulkano::sync::GpuFuture;
+use vulkano::sampler::Sampler;
+use image;
 
 pub struct Graphics {
     pub device: Arc<Device>,
     pub queue: Arc<Queue>,
-    pub physical_device_index: usize,
     pub swapchain: Arc<Swapchain<Window>>,
     pub images: Vec<Arc<SwapchainImage<Window>>>,
     pub dimensions: [u32; 2],
@@ -31,13 +37,12 @@ impl Graphics {
 
         let physical = vulkano::instance::PhysicalDevice::enumerate(&instance)
             .next().expect("no device available");
-        let physical_device_index = physical.index();
         println!("Using device: {} (type: {:?})", physical.name(), physical.ty());
 
-        let mut events_loop = winit::EventsLoop::new();
+        let events_loop = winit::EventsLoop::new();
         let surface = winit::WindowBuilder::new().build_vk_surface(&events_loop, instance.clone()).unwrap();
 
-        let mut dimensions;
+        let dimensions;
 
         let queue = physical.queue_families().find(|&q| q.supports_graphics() &&
             surface.is_supported(q).unwrap_or(false))
@@ -53,7 +58,7 @@ impl Graphics {
             .expect("failed to create device");
         let queue = queues.next().unwrap();
 
-        let (mut swapchain, mut images) = {
+        let (swapchain, images) = {
             let caps = surface.capabilities(physical).expect("failed to get surface capabilities");
 
             dimensions = caps.current_extent.unwrap_or([1024, 768]);
@@ -71,12 +76,49 @@ impl Graphics {
         Graphics {
             device,
             queue,
-            physical_device_index,
             swapchain,
             images,
             dimensions,
             surface,
             events_loop,
         }
+    }
+
+    pub fn physical_device(&self) -> PhysicalDevice {
+        self.device.physical_device()
+    }
+
+    pub fn load_model(&self, filename: &str) -> Vec<Vertex> {
+        let monkey = ObjModel::from_file(filename);
+        monkey.vertices()
+    }
+
+    pub fn load_texture(&self, filename: &str) -> (Arc<ImageViewAccess + Send + Sync>, Box<GpuFuture>) {
+        let image = image::open(filename).unwrap().to_rgba();
+        let image_width = image.width();
+        let image_height = image.height();
+        let image_data = image.into_raw().clone();
+        let (tex, tex_future) = vulkano::image::immutable::ImmutableImage::from_iter(
+            image_data.iter().cloned(),
+            vulkano::image::Dimensions::Dim2d { width: image_width, height: image_height },
+            vulkano::format::R8G8B8A8Unorm,
+            self.queue.clone()).unwrap();
+        (tex, Box::new(tex_future))
+    }
+
+    pub fn create_sampler(&self) -> Arc<Sampler> {
+        vulkano::sampler::Sampler::new(
+            self.device.clone(),
+            vulkano::sampler::Filter::Linear,
+            vulkano::sampler::Filter::Linear,
+            vulkano::sampler::MipmapMode::Nearest,
+            vulkano::sampler::SamplerAddressMode::Repeat,
+            vulkano::sampler::SamplerAddressMode::Repeat,
+            vulkano::sampler::SamplerAddressMode::Repeat,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+        ).unwrap()
     }
 }
