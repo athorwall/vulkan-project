@@ -4,85 +4,44 @@ extern crate cgmath;
 extern crate winit;
 extern crate time;
 extern crate render;
-#[macro_use]
 extern crate vulkano;
 #[macro_use]
 extern crate vulkano_shader_derive;
 extern crate vulkano_win;
 extern crate image;
 
+use std::sync::Arc;
+
 use cgmath::*;
 
+use vulkano::descriptor::DescriptorSet;
 use vulkano::sync::GpuFuture;
-
-use std::sync::Arc;
 
 use render::graphics::*;
 
 fn main() {
     let mut graphics = Graphics::new();
 
-    let mut depth_buffer = vulkano::image::attachment::AttachmentImage::transient(
-        graphics.device.clone(),
-        graphics.dimensions,
-        vulkano::format::D16Unorm,
-    ).unwrap();
-
-    let monkey_vertices = graphics.load_model("resources/sphere.obj");
+    let model = graphics.load_model("resources/sphere.obj");
     let (texture, texture_future) = graphics.load_texture("resources/Metal_Plate_007_COLOR.png");
     let (normal_map, normal_map_future) = graphics.load_texture("resources/Metal_Plate_007_NORM.png");
-    let sampler = graphics.create_sampler();
-
-    let vertex_buffer = vulkano::buffer::cpu_access::CpuAccessibleBuffer
-    ::from_iter(graphics.device.clone(), vulkano::buffer::BufferUsage::all(), monkey_vertices.iter().cloned()).expect("failed to create buffer");
 
     let mut proj = cgmath::perspective(cgmath::Rad(std::f32::consts::FRAC_PI_2), { graphics.dimensions[0] as f32 / graphics.dimensions[1] as f32 }, 0.01, 100.0);
     let camera = cgmath::Matrix4::look_at(Point3 { x: 0.0, y: 0.4, z: 2.0 }, Point3 { x: 0.0, y: 0.0, z: 0.0 }, Vector3 { x: 0.0, y: -1.0, z: 0.0 }).invert().unwrap();
 
-    let uniform_buffer = vulkano::buffer::cpu_pool::CpuBufferPool::<vs::ty::Data>
-    ::new(graphics.device.clone(), vulkano::buffer::BufferUsage::all());
+    let uniform_buffer = vulkano::buffer::cpu_pool::CpuBufferPool::<vs::ty::Data>::new(
+        graphics.device.clone(),
+        vulkano::buffer::BufferUsage::all());
 
     let vs = vs::Shader::load(graphics.device.clone()).expect("failed to create shader module");
     let fs = fs::Shader::load(graphics.device.clone()).expect("failed to create shader module");
 
-    let renderpass = Arc::new(
-        single_pass_renderpass!(graphics.device.clone(),
-            attachments: {
-                color: {
-                    load: Clear,
-                    store: Store,
-                    format: graphics.swapchain.format(),
-                    samples: 1,
-                },
-                depth: {
-                    load: Clear,
-                    store: DontCare,
-                    format: vulkano::format::Format::D16Unorm,
-                    samples: 1,
-                }
-            },
-            pass: {
-                color: [color],
-                depth_stencil: {depth}
-            }
-        ).unwrap()
-    );
-
-    let pipeline = Arc::new(vulkano::pipeline::GraphicsPipeline::start()
-        .vertex_input_single_buffer()
-        .vertex_shader(vs.main_entry_point(), ())
-        .triangle_list()
-        .viewports_dynamic_scissors_irrelevant(1)
-        .fragment_shader(fs.main_entry_point(), ())
-        .depth_stencil_simple_depth()
-        .render_pass(vulkano::framebuffer::Subpass::from(renderpass.clone(), 0).unwrap())
-        .build(graphics.device.clone())
-        .unwrap());
+    let pipeline = graphics.create_pipeline(vs.main_entry_point(), fs.main_entry_point());
     let mut framebuffers: Option<Vec<Arc<vulkano::framebuffer::Framebuffer<_,_>>>> = None;
 
-   let sampler_set: Arc<vulkano::descriptor::DescriptorSet+ Send + Sync> = Arc::new(vulkano::descriptor::descriptor_set::PersistentDescriptorSet::start(pipeline.clone(), 0)
-        .add_sampled_image(texture.clone(), sampler.clone()).expect("Failed to add sampled image")
-        .add_sampled_image(normal_map.clone(), sampler.clone()).expect("Failed to load normal map!")
+   let sampler_set: Arc<DescriptorSet + Send + Sync> = Arc::new(vulkano::descriptor::descriptor_set::PersistentDescriptorSet::start(pipeline.clone(), 0)
+        .add_sampled_image(texture.clone(), graphics.sampler.clone()).expect("Failed to add sampled image")
+        .add_sampled_image(normal_map.clone(), graphics.sampler.clone()).expect("Failed to load normal map!")
         .build().expect("Failed to build sampler set")
     );
 
@@ -95,59 +54,25 @@ fn main() {
     // I think that these are just all futures that need to be completed within the rendering of the first frame.
     let mut previous_frame: Box<GpuFuture> = Box::new(device_future.join(texture_future).join(normal_map_future));
 
-
     let rotation_start = std::time::Instant::now();
-
-    let mut dynamic_state = vulkano::command_buffer::DynamicState {
-        line_width: None,
-        viewports: Some(vec![vulkano::pipeline::viewport::Viewport {
-            origin: [0.0, 0.0],
-            dimensions: [graphics.dimensions[0] as f32, graphics.dimensions[1] as f32],
-            depth_range: 0.0 .. 1.0,
-        }]),
-        scissors: None,
-    };
 
     loop {
         previous_frame.cleanup_finished();
 
         if recreate_swapchain {
-
-            graphics.dimensions = graphics.surface.capabilities(graphics.physical_device())
-                .expect("failed to get surface capabilities")
-                .current_extent.unwrap_or([1024, 768]);
-
-            let (new_swapchain, new_images) = match graphics.swapchain.recreate_with_dimension(graphics.dimensions) {
-                Ok(r) => r,
-                Err(vulkano::swapchain::SwapchainCreationError::UnsupportedDimensions) => {
-                    continue;
-                },
-                Err(err) => panic!("{:?}", err)
-            };
-
-            graphics.swapchain = new_swapchain;
-            graphics.images = new_images;
-
-            depth_buffer = vulkano::image::attachment::AttachmentImage::transient(graphics.device.clone(), graphics.dimensions, vulkano::format::D16Unorm).unwrap();
-
+            if !graphics.recreate_swapchain() {
+                continue;
+            }
             framebuffers = None;
-
             proj = cgmath::perspective(cgmath::Rad(std::f32::consts::FRAC_PI_2), { graphics.dimensions[0] as f32 / graphics.dimensions[1] as f32 }, 0.01, 100.0);
-
-            dynamic_state.viewports = Some(vec![vulkano::pipeline::viewport::Viewport {
-                origin: [0.0, 0.0],
-                dimensions: [graphics.dimensions[0] as f32, graphics.dimensions[1] as f32],
-                depth_range: 0.0 .. 1.0,
-            }]);
-
             recreate_swapchain = false;
         }
 
         if framebuffers.is_none() {
             framebuffers = Some(graphics.images.iter().map(|image| {
-                Arc::new(vulkano::framebuffer::Framebuffer::start(renderpass.clone())
+                Arc::new(vulkano::framebuffer::Framebuffer::start(graphics.renderpass.clone())
                     .add(image.clone()).unwrap()
-                    .add(depth_buffer.clone()).unwrap()
+                    .add(graphics.depth_buffer.clone()).unwrap()
                     .build().unwrap())
             }).collect::<Vec<_>>());
         }
@@ -166,7 +91,7 @@ fn main() {
             uniform_buffer.next(uniform_data).unwrap()
         };
 
-        let set: Arc<vulkano::descriptor::DescriptorSet + Send + Sync> = Arc::from(pool.next()
+        let set: Arc<DescriptorSet + Send + Sync> = Arc::from(pool.next()
             .add_buffer(uniform_buffer_subbuffer).unwrap()
             .build().unwrap());
 
@@ -189,8 +114,8 @@ fn main() {
                 ]).unwrap()
             .draw(
                 pipeline.clone(),
-                &dynamic_state,
-                vertex_buffer.clone(),
+                &graphics.dynamic_state,
+                vec![model.clone()],
                 (sampler_set.clone(), set.clone()),
                 ()).unwrap()
             .end_render_pass().unwrap()
