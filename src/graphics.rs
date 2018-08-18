@@ -19,6 +19,7 @@ use vulkano::sync::GpuFuture;
 use vulkano::sampler::Sampler;
 use image;
 use vulkano::framebuffer::RenderPassAbstract;
+use vulkano::framebuffer::FramebufferAbstract;
 use vulkano::pipeline::GraphicsPipelineAbstract;
 use vulkano::pipeline::shader::GraphicsEntryPointAbstract;
 use vulkano::image::AttachmentImage;
@@ -32,6 +33,7 @@ pub struct Graphics {
     pub queue: Arc<Queue>,
     pub swapchain: Arc<Swapchain<Window>>,
     pub images: Vec<Arc<SwapchainImage<Window>>>,
+    pub framebuffers: Vec<Arc<FramebufferAbstract + Send + Sync>>,
     // We only support a single pass for now.
     pub renderpass: Arc<RenderPassAbstract + Send + Sync>,
     pub dimensions: [u32; 2],
@@ -44,6 +46,9 @@ pub struct Graphics {
     pub dynamic_state: DynamicState,
 
     pub sampler: Arc<Sampler>,
+
+    // Frame-specific fields
+
 }
 
 impl Graphics {
@@ -132,6 +137,15 @@ impl Graphics {
             vulkano::format::D16Unorm,
         ).unwrap();
 
+        let framebuffers = images.iter().map(|image| {
+            let f: Arc<FramebufferAbstract + Send + Sync> = Arc::new(
+                vulkano::framebuffer::Framebuffer::start(renderpass.clone())
+                    .add(image.clone()).unwrap()
+                    .add(depth_buffer.clone()).unwrap()
+                    .build().unwrap());
+            f
+        }).collect::<Vec<_>>();
+
         let dynamic_state = vulkano::command_buffer::DynamicState {
             line_width: None,
             viewports: Some(vec![Viewport {
@@ -160,6 +174,7 @@ impl Graphics {
             queue,
             swapchain,
             images,
+            framebuffers,
             renderpass,
             dimensions,
             surface,
@@ -193,7 +208,20 @@ impl Graphics {
             dimensions: [self.dimensions[0] as f32, self.dimensions[1] as f32],
             depth_range: 0.0 .. 1.0,
         }]);
+
+        self.recreate_framebuffers();
         true
+    }
+
+    fn recreate_framebuffers(&mut self) {
+        self.framebuffers = self.images.iter().map(|image| {
+            let f: Arc<FramebufferAbstract + Send + Sync> = Arc::new(
+                vulkano::framebuffer::Framebuffer::start(self.renderpass.clone())
+                    .add(image.clone()).unwrap()
+                    .add(self.depth_buffer.clone()).unwrap()
+                    .build().unwrap());
+            f
+        }).collect::<Vec<_>>();
     }
 
     pub fn physical_device(&self) -> PhysicalDevice {
